@@ -1,0 +1,17 @@
+langchain
+streamlit
+python-dotenv
+baidusearch
+playwright
+python-docx
+PyPDF2
+pdfplumber
+openpyxl
+python-pptx
+pillow
+pytesseract
+pandas
+browser_use
+selenium
+langsmith
+dotenv
