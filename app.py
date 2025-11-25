@@ -17,11 +17,22 @@ st.set_page_config(page_title="OpenManus-LC", layout="wide")
 
 
 @st.cache_resource
-def init_core(model_name=None):
-    if "core" not in st.session_state:
-        # 如果提供了模型名，则使用提供的模型名，否则使用配置管理器中的默认值
-        core = ManusCore(model_name=model_name)
-
+# 修改模型初始化函数，支持模型类型选择
+def init_core(model_name=None, model_type="ollama"):
+    if "core" not in st.session_state or st.session_state.get("current_model") != f"{model_type}:{model_name}":
+        # 保存当前模型信息到session state
+        st.session_state.current_model = f"{model_type}:{model_name}"
+        
+        # 根据模型类型设置环境变量（如果需要）
+        if model_type == "openrouter":
+            os.environ["MODEL_NAME"] = model_name
+        else:
+            os.environ["OLLAMA_MODEL"] = model_name
+        
+        # 创建核心实例
+        # 修改ManusCore初始化，传递model_type参数
+        core = ManusCore(model_name=model_name, model_type=model_type)
+        
         # 注册基础工具
         core.register_tool(DocumentReaderTool(memory=core.doc_memory))
         #core.register_tool(BaiduSearchTool())
@@ -44,18 +55,43 @@ def init_core(model_name=None):
 # 添加模型选择下拉框
 with st.sidebar:
     st.title("⚙️ 配置")
-    model_name = st.selectbox(
-        "选择 Ollama 模型",
-        ["qwen3:14b", "llama3", "gemma:7b", "mistral", "自定义..."],
+    
+    # 首先选择模型类型
+    model_type = st.selectbox(
+        "选择模型类型",
+        ["ollama", "openrouter"],
         index=0
     )
+    
+    # 根据模型类型显示不同的模型选项
+    if model_type == "ollama":
+        model_name = st.selectbox(
+            "选择 Ollama 模型",
+            ["qwen3:14b", "llama3", "gemma:7b", "mistral", "自定义..."],
+            index=0
+        )
+        
+        # 如果选择自定义，则让用户输入模型名
+        if model_name == "自定义...":
+            model_name = st.text_input("输入 Ollama 模型名称", value="")
+    else:  # openrouter
+        model_name = st.selectbox(
+            "选择 OpenRouter 模型",
+            ["x-ai/grok-4.1-fast:free", "自定义..."],
+            index=0
+        )
+        
+        # 如果选择自定义，则让用户输入模型名
+        if model_name == "自定义...":
+            model_name = st.text_input("输入 OpenRouter 模型名称", value="deepseek/deepseek-r1-0528:free")
+    
+    # 显示OpenRouter API密钥配置提示
+    if model_type == "openrouter" and not config_manager.openrouter_api_key:
+        st.warning("⚠️ OpenRouter API密钥未配置，请在.env文件中设置OPENROUTER_API_KEY")
 
-    # 如果选择自定义，则让用户输入模型名
-    if model_name == "自定义...":
-        model_name = st.text_input("输入 Ollama 模型名称", value="")
-
-manus = init_core(model_name)
-st.title("📖 OpenManus-LC (LangChain + Ollama + Streamlit)")
+# 初始化核心，传入模型类型和名称
+manus = init_core(model_name=model_name, model_type=model_type)
+st.title("📖 OpenManus-LC (LangChain + 多模型 + Streamlit)")
 st.markdown("---")
 
 # 添加工具使用说明

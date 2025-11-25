@@ -23,11 +23,19 @@ class ConfigManager:
         PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
         # 模型配置
-        self.model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.model_name = os.getenv("MODEL_NAME", "qwen3:14b")
         self.temperature = float(os.getenv("TEMPERATURE", "0.2"))
         
         # OpenAI 配置
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        
+        # OpenRouter 配置
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "")  # 设置为空，从界面获取
+        
+        # Ollama 配置
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:14b")
         
         # LangSmith 配置
         self.langchain_tracing = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
@@ -63,11 +71,18 @@ class ConfigManager:
         """检查 LangSmith 是否配置正确"""
         return self.langchain_tracing and bool(self.langsmith_api_key)
     
+    def is_openrouter_configured(self) -> bool:
+        """检查 OpenRouter 是否配置正确"""
+        return bool(self.openrouter_api_key)
+    
     def get_config_dict(self) -> Dict[str, Any]:
         """获取所有配置的字典表示"""
         return {
             "model_name": self.model_name,
             "temperature": self.temperature,
+            "openai_model": self.openai_model,
+            "openrouter_model": self.openrouter_model,
+            "ollama_model": self.ollama_model,
             "langchain_tracing": self.langchain_tracing,
             "langsmith_project": self.langsmith_project,
             "max_retries": self.max_retries,

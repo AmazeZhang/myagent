@@ -2,6 +2,8 @@
 import json, re
 from typing import Any, Dict, List
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
+from langsmith import traceable
 from utils.logger import setup_logger, log_function_call, error_handler
 from utils.exceptions import ToolExecutionError, LLMError, NetworkError
 
@@ -10,20 +12,60 @@ logger = setup_logger(__name__)
 
 
 class ManusAgent:
-    """支持 Ollama 的改进 Agent：
+    """支持 Ollama 和 OpenRouter 的改进 Agent：
        - plan() 要求返回 {need_tool: bool, plan: [...], thoughts: str}
        - execute() 会根据 need_tool 决定是否调用工具
        - 返回结构包含 final_answer、plan、tool_logs、llm_thoughts
     """
 
-    def __init__(self, registry, model_name: str = "llama3", temperature: float = 0.2, langsmith_tracer=None):
+    def __init__(self, registry, model_name: str = "qwen3:14b", model_type: str = "ollama", temperature: float = 0.2, langsmith_tracer=None):
         self.registry = registry
+        self.model_name = model_name
+        self.model_type = model_type  # 添加模型类型
+        self.temperature = temperature
+        self.langsmith_tracer = langsmith_tracer  # 添加LangSmith追踪器
+        
         try:
-            self.llm = ChatOllama(model=model_name, temperature=temperature)
+            # 根据模型类型决定使用哪个provider，而不是根据模型名称前缀
+            if model_type == "ollama":
+                # 使用Ollama本地模型
+                self.llm = ChatOllama(model=model_name, temperature=temperature)
+                logger.info(f"已初始化Ollama模型: {model_name}")
+            elif model_type == "openrouter":
+                # 使用OpenRouter模型 - 符合LangChain标准的实现
+                from langchain_openai import ChatOpenAI
+                from utils.config_manager import config_manager
+                
+                api_key = config_manager.openrouter_api_key
+                if not api_key:
+                    raise LLMError("OpenRouter API密钥未配置，请在.env文件中设置OPENROUTER_API_KEY")
+                
+                # 清理模型名称（移除:free等后缀）
+                clean_model_name = model_name
+                if ":" in model_name:
+                    clean_model_name = model_name.split(":")[0]
+                
+                # 使用LangChain标准配置
+                self.llm = ChatOpenAI(
+                    model=clean_model_name,
+                    temperature=temperature,
+                    openai_api_base="https://openrouter.ai/api/v1",
+                    openai_api_key=api_key,
+                    max_retries=2,
+                    timeout=30,
+                    default_headers={
+                        "HTTP-Referer": "https://openmanus-lc", 
+                        "X-Title": "OpenManus-LC"
+                    }
+                )
+                logger.info(f"已使用LangChain标准方式初始化OpenRouter模型: {clean_model_name} (原始名称: {model_name})")
+            else:
+                # 默认使用Ollama
+                self.llm = ChatOllama(model=model_name, temperature=temperature)
+                logger.info(f"已初始化默认Ollama模型: {model_name}")
         except Exception as e:
             logger.error(f"初始化LLM失败: {e}")
             raise LLMError(f"无法初始化模型 {model_name}: {str(e)}", model_name=model_name)
-        self.langsmith_tracer = langsmith_tracer  # 添加LangSmith追踪器
 
     @log_function_call
     def _extract_json(self, text: str) -> str:
@@ -299,7 +341,6 @@ class ManusAgent:
                         round_success = False
                         logger.error(f"工具 '{tool_name}' 不存在")
                         continue
-                    
                     try:
                         # 如果是web_search工具，执行搜索并提取URL
                         if tool_name == "web_search":

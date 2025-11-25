@@ -112,31 +112,40 @@ class WebBrowserTool(BaseManusTool):
                 json_params = json.loads(query)
                 params.update(json_params)
             else:
-                # 解析键值对格式
-                parts = [p.strip() for p in query.split(",")]
+                # 修复：同时支持逗号分隔和空格分隔的参数格式
+                # 首先尝试用空格分割
+                parts = []
+                if '=' in query:
+                    # 处理带引号的值
+                    in_quotes = False
+                    current_part = ""
+                    for char in query:
+                        if char == '"':
+                            in_quotes = not in_quotes
+                            current_part += char
+                        elif char == ' ' and not in_quotes:
+                            if current_part.strip():
+                                parts.append(current_part.strip())
+                                current_part = ""
+                        else:
+                            current_part += char
+                    if current_part.strip():
+                        parts.append(current_part.strip())
+                else:
+                    parts = query.split()
+
+                # 解析键值对
                 for part in parts:
                     if '=' in part:
                         key, value = part.split('=', 1)
                         key = key.strip()
-                        value = value.strip().strip('"\'')
+                        # 移除引号
+                        if value.startswith('"') and value.endswith('"'):
+                            value = value[1:-1]
+                        elif value.startswith("'") and value.endswith("'"):
+                            value = value[1:-1]
 
-                        if key == "action":
-                            params["action"] = value
-                        elif key == "url":
-                            params["url"] = value
-                        elif key == "session_id":
-                            params["session_id"] = value
-                        elif key == "selector":
-                            params["selector"] = value
-                        elif key == "text":
-                            params["text"] = value
-                        elif key == "wait_time":
-                            params["wait_time"] = int(value) if value.isdigit() else 5
-                        elif key == "params":
-                            try:
-                                params["params"] = json.loads(value)
-                            except:
-                                params["params"] = {}
+                        params[key] = value
 
         except Exception as e:
             # 如果解析失败，尝试简单解析
@@ -341,7 +350,9 @@ class WebBrowserTool(BaseManusTool):
 
             # 生成截图
             screenshot = await page.screenshot(full_page=False, type='jpeg', quality=80)
-            screenshot_b64 = screenshot.decode('base64') if hasattr(screenshot, 'decode') else screenshot
+            screenshot_b64 = base64.b64encode(screenshot).decode('utf-8') if hasattr(screenshot,
+                                                                                     'decode') else base64.b64encode(
+                screenshot).decode('utf-8')
 
             return {
                 "success": True,
@@ -443,7 +454,7 @@ class WebBrowserTool(BaseManusTool):
                 image_bytes = base64.b64decode(image_data)
 
                 # 生成文件名
-                filename = f"cat_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                filename = f"image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
                 filepath = download_dir / filename
 
                 # 保存文件
@@ -516,7 +527,7 @@ class WebBrowserTool(BaseManusTool):
             filepath = screenshot_dir / filename
 
             if area == "full_page":
-                # 全屏截图
+# 全屏截图
                 screenshot_data = await page.screenshot(full_page=True, path=filepath)
             elif area == "viewport":
                 # 可视区域截图
@@ -696,6 +707,10 @@ class WebBrowserTool(BaseManusTool):
         if not action:
             return self._format_result("failed", "请提供操作类型（action）", {"error_type": "missing_action"})
 
+        # 修复：添加额外的参数解析逻辑，确保action被正确识别
+        if action.startswith('"') and action.endswith('"'):
+            action = action[1:-1]  # 移除可能的引号
+
         if action not in self.SUPPORTED_ACTIONS:
             return self._format_result("failed", f"不支持的操作类型: {action}", {"error_type": "unsupported_action"})
 
@@ -703,14 +718,22 @@ class WebBrowserTool(BaseManusTool):
         result = {}
 
         if action == "go_to_url":
-            if not params["url"]:
+            url = params["url"]
+            # 修复：确保URL被正确解析，移除可能的引号
+            if url.startswith('"') and url.endswith('"'):
+                url = url[1:-1]
+            if not url:
                 return self._format_result("failed", "导航操作需要提供URL", {"error_type": "missing_url"})
-            result = await self._go_to_url(session_id, params["url"])
+            result = await self._go_to_url(session_id, url)
 
         elif action == "click_element":
-            if not params["selector"]:
+            # 修复：添加类似的参数清理
+            selector = params["selector"]
+            if selector.startswith('"') and selector.endswith('"'):
+                selector = selector[1:-1]
+            if not selector:
                 return self._format_result("failed", "点击操作需要提供元素选择器", {"error_type": "missing_selector"})
-            result = await self._click_element(session_id, params["selector"])
+            result = await self._click_element(session_id, selector)
 
         elif action == "input_text":
             if not params["selector"] or not params["text"]:
@@ -720,15 +743,23 @@ class WebBrowserTool(BaseManusTool):
 
         elif action == "extract_content":
             target = params.get("params", {}).get("target", "main")
+            # 支持直接通过参数传递target
+            if not target and "target" in params:
+                target = params["target"]
             result = await self._extract_content(session_id, target)
 
         elif action == "get_page_state":
             result = await self._get_page_state(session_id)
 
         elif action == "take_screenshot":
-            # 截图操作
+            # 截图操作修复
             area = params.get("params", {}).get("area", "full_page")
             selector = params.get("params", {}).get("selector")
+            # 支持直接通过参数传递area和selector
+            if not area and "area" in params:
+                area = params["area"]
+            if not selector and "selector" in params:
+                selector = params["selector"]
             result = await self._take_screenshot(session_id, area, selector)
 
         elif action == "download_image":
@@ -737,6 +768,17 @@ class WebBrowserTool(BaseManusTool):
             image_url = params.get("params", {}).get("image_url")
             selector = params.get("params", {}).get("selector")
             fallback = params.get("params", {}).get("fallback_to_screenshot", True)
+
+            # 支持直接通过参数传递
+            if not selector and "selector" in params:
+                selector = params["selector"]
+            if not image_url and "image_url" in params:
+                image_url = params["image_url"]
+            if image_index is None and "image_index" in params:
+                try:
+                    image_index = int(params["image_index"])
+                except:
+                    pass
 
             if selector:
                 result = await self._download_image_by_click_with_fallback(session_id, selector, fallback)
@@ -767,6 +809,11 @@ class WebBrowserTool(BaseManusTool):
 
         elif action == "wait":
             wait_time = params.get("wait_time", 5)
+            # 尝试转换为数字
+            try:
+                wait_time = float(wait_time)
+            except:
+                wait_time = 5
             await asyncio.sleep(wait_time)
             result = {"success": True, "message": f"已等待 {wait_time} 秒"}
 
@@ -781,3 +828,34 @@ class WebBrowserTool(BaseManusTool):
             return self._format_result("failed", result["error"], {"error_type": error_type})
         else:
             return self._format_result("unknown", "操作执行完成，但结果状态未知", result)
+
+    def call(self, query: str) -> str:
+        """实现BaseManusTool的call方法，支持异步操作，适配已有事件循环环境"""
+        try:
+            # 检查当前是否已有运行中的事件循环
+            try:
+                loop = asyncio.get_event_loop()
+                # 如果当前循环已经在运行，使用它
+                if loop.is_running():
+                    # 在运行中的循环上使用create_task并等待完成
+                    # 注意：这里使用run_coroutine_threadsafe是为了线程安全
+                    # 但由于我们需要立即获取结果，我们可以使用更直接的方法
+                    future = asyncio.run_coroutine_threadsafe(self._run(query), loop)
+                    # 等待结果，设置合理的超时
+                    result = future.result(timeout=60)  # 60秒超时
+                    return result
+                else:
+                    # 当前循环存在但未运行，使用它
+                    result = loop.run_until_complete(self._run(query))
+                    return result
+            except RuntimeError:
+                # 没有找到事件循环，创建新的
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(self._run(query))
+                    return result
+                finally:
+                    loop.close()
+        except Exception as e:
+            return self._format_result("failed", f"工具调用失败: {str(e)}", {"error_type": "tool_execution_failed"})

@@ -9,7 +9,7 @@ from utils.langsmith_config import langsmith_config  # 导入LangSmith配置
 from utils.config_manager import config_manager  # 导入配置管理器
 
 class ManusCore:
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: str = None, model_type: str = "ollama"):
         self.doc_memory = MemoryManager()  # 文档记忆
         self.chat_memory = ConversationMemoryManager()  # 对话记忆
         self.tools = []
@@ -18,7 +18,8 @@ class ManusCore:
         
         # 使用配置管理器中的模型名称或参数提供的模型名称
         self.model_name = model_name or config_manager.model_name
-        self.multi_agent = MultiAgentOrchestrator(model_name=self.model_name)  # 创建多Agent协调器
+        self.model_type = model_type  # 添加模型类型
+        self.multi_agent = MultiAgentOrchestrator(model_name=self.model_name, model_type=self.model_type)  # 创建多Agent协调器
         
         # LangSmith配置
         self.langsmith_config = langsmith_config
@@ -41,6 +42,7 @@ class ManusCore:
         self.agent = ManusAgent(
             registry=self.tool_registry,
             model_name=self.multi_agent.model_name,
+            model_type=self.model_type,  # 传递模型类型
             temperature=config_manager.temperature,
             langsmith_tracer=self.langsmith_tracer  # 传递LangSmith追踪器
         )

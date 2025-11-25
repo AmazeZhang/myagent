@@ -11,12 +11,46 @@ from langchain_ollama import ChatOllama
 class MultiAgentOrchestrator:
     """多Agent协调器 - 改进版本，专注于专家选择"""
 
-    def __init__(self, model_name: str = "llama3"):
+    def __init__(self, model_name: str = "llama3", model_type: str = "ollama"):
         self.model_name = model_name
-        self.llm = ChatOllama(model=model_name, temperature=0.2)
+        self.model_type = model_type  # 添加模型类型
+        
+        # 根据模型类型初始化LLM
+        if model_type == "openrouter":
+            from langchain_openai import ChatOpenAI
+            from utils.config_manager import config_manager
+            
+            api_key = config_manager.openrouter_api_key
+            if not api_key:
+                raise Exception("OpenRouter API密钥未配置")
+            
+            # 清理模型名称
+            clean_model_name = model_name
+            if ":" in model_name:
+                clean_model_name = model_name.split(":")[0]
+            
+            self.llm = ChatOpenAI(
+                model=clean_model_name,
+                temperature=0.2,
+                openai_api_base="https://openrouter.ai/api/v1",
+                openai_api_key=api_key,
+                max_retries=2,
+                timeout=30,
+                default_headers={
+                    "HTTP-Referer": "https://openmanus-lc", 
+                    "X-Title": "OpenManus-LC"
+                }
+            )
+        else:
+            # 默认使用Ollama
+            self.llm = ChatOllama(model=model_name, temperature=0.2)
 
         # 使用专家工厂创建专家
-        self.expert_factory = ExpertAgentFactory(model_name=model_name)
+        self.expert_factory = ExpertAgentFactory(
+            model_name=model_name, 
+            model_type=model_type,
+            registry=ToolRegistry()  # 添加registry参数
+        )
         self.experts = self._initialize_experts()
 
         # 专家表现跟踪

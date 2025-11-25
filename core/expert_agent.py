@@ -3,19 +3,30 @@ import json, re, asyncio
 from typing import Dict, Any, List
 from core.registry import ToolRegistry
 from langchain_ollama import ChatOllama
-
+from core.tool_base import BaseManusTool
 
 class ExpertAgent:
     """专业Agent类，专注于特定领域，不知道自己是"某某专家" """
 
     def __init__(self, name: str, description: str, registry: ToolRegistry,
-                 model_name: str = "llama3", temperature: float = 0.2):
+                 model_name: str = "llama3", temperature: float = 0.2, llm=None):
         self.name = name
         self.description = description
         self.registry = registry
         self.model_name = model_name
         self.temperature = temperature
-        self.llm = ChatOllama(model=model_name, temperature=temperature)
+        
+        # 如果提供了llm参数，使用提供的llm，否则创建默认的ChatOllama
+        if llm is not None:
+            self.llm = llm
+        else:
+            self.llm = ChatOllama(model=model_name, temperature=temperature)
+
+
+
+    def register_tool_to_all_experts(self, tool):
+        """注册工具到所有专家"""
+        self.registry.register(tool)  # 将self.tool_registry改为self.registry
 
     def _extract_json(self, text: str) -> str:
         """提取JSON内容"""
@@ -432,41 +443,89 @@ class ExpertAgent:
 
 
 class ExpertAgentFactory:
-    """专家Agent工厂类，负责创建和管理不同类型的专家Agent"""
+    """专家Agent工厂 - 支持多种模型类型"""
 
-    def __init__(self, model_name: str = "llama3"):
+    def __init__(self, model_name: str = "llama3", model_type: str = "ollama", registry: ToolRegistry = None):
         self.model_name = model_name
-        self.tool_registry = ToolRegistry()
+        self.model_type = model_type  # 添加模型类型
+        self.registry = registry or ToolRegistry()  # 初始化registry
+        self.tools = []
+
+    def register_tool_to_all_experts(self, tool: BaseManusTool):
+        """注册工具到所有专家"""
+        self.tools.append(tool)
+
+    def _create_llm(self):
+        """根据模型类型创建LLM实例"""
+        if self.model_type == "openrouter":
+            from langchain_openai import ChatOpenAI
+            from utils.config_manager import config_manager
+            
+            api_key = config_manager.openrouter_api_key
+            if not api_key:
+                raise Exception("OpenRouter API密钥未配置")
+            
+            # 清理模型名称
+            clean_model_name = self.model_name
+            if ":" in self.model_name:
+                clean_model_name = self.model_name.split(":")[0]
+            
+            return ChatOpenAI(
+                model=clean_model_name,
+                temperature=0.2,
+                openai_api_base="https://openrouter.ai/api/v1",
+                openai_api_key=api_key,
+                max_retries=2,
+                timeout=30,
+                default_headers={
+                    "HTTP-Referer": "https://openmanus-lc", 
+                    "X-Title": "OpenManus-LC"
+                }
+            )
+        else:
+            # 默认使用Ollama
+            return ChatOllama(model=self.model_name, temperature=0.2)
 
     def create_search_expert(self) -> ExpertAgent:
-        """创建搜索专家 - 专业化处理搜索任务"""
+        """创建搜索专家"""
+        llm = self._create_llm()
         return ExpertAgent(
             name="search_expert",
-            description="搜索专家 - 擅长使用搜索工具获取实时信息和网络数据，处理图片、网页截图、新闻天气查询等任务",
-            registry=self.tool_registry,
-            model_name=self.model_name,
-            temperature=0.1  # 搜索任务需要精确性
+            description="擅长网页搜索、实时信息获取、图片处理、网络交互等任务",
+            registry=self.registry,  # 添加registry参数
+            llm=llm
+            # 移除tools参数
         )
 
     def create_document_expert(self) -> ExpertAgent:
-        """创建文档专家 - 专业化处理文档任务"""
+        """创建文档专家"""
+        llm = self._create_llm()
         return ExpertAgent(
             name="document_expert",
-            description="文档专家 - 擅长处理文档相关任务，包括文档阅读分析、文件处理、内容提取、格式转换等",
-            registry=self.tool_registry,
-            model_name=self.model_name,
-            temperature=0.3  # 文档处理需要一定创造性
+            description="擅长文档处理、文件操作、内容分析等任务",
+            registry=self.registry,  # 添加registry参数
+            llm=llm
+            # 移除tools参数
         )
 
     def create_general_expert(self) -> ExpertAgent:
-        """创建通用专家 - 专业化处理综合任务"""
+        """创建通用专家"""
+        llm = self._create_llm()
         return ExpertAgent(
             name="general_expert",
-            description="通用专家 - 处理一般性问题，协调其他专家Agent，适合综合性和复杂任务",
-            registry=self.tool_registry,
-            model_name=self.model_name,
-            temperature=0.2  # 通用任务适中温度
+            description="擅长一般性问题解答、综合处理、推理分析等任务",
+            registry=self.registry,  # 添加registry参数
+            llm=llm
+            # 移除tools参数
         )
+
+    def get_available_experts(self) -> Dict[str, str]:
+        """获取可用专家列表"""
+        return {
+            "search_expert": "擅长网页搜索、实时信息获取、图片处理、网络交互等任务",
+            "document_expert": "擅长文档处理、文件操作、内容分析等任务",
+            "general_expert": "擅长一般性问题解答、综合处理、推理分析等任务"
+        }
 
     def create_expert_by_name(self, expert_name: str) -> ExpertAgent:
         """根据名称创建专家"""
@@ -483,7 +542,8 @@ class ExpertAgentFactory:
 
     def register_tool_to_all_experts(self, tool):
         """注册工具到所有专家"""
-        self.tool_registry.register(tool)
+        self.tools.append(tool)
+        self.registry.register(tool)  # 添加这一行，确保工具也注册到registry
 
     def get_available_experts(self) -> Dict[str, str]:
         """获取可用的专家列表及其描述"""
