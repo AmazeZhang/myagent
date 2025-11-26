@@ -1,3 +1,5 @@
 /.env
 logs/
 .trae/
+models
+OpenManus
