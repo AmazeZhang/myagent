@@ -2,17 +2,35 @@
 from core.tool_base import BaseManusTool
 from typing import Optional, Dict, Any, List, ClassVar
 import json
-import asyncio
+import time
 from datetime import datetime
 import uuid
 import os
 import base64
+import sys
 from pathlib import Path
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from webdriver_manager.chrome import ChromeDriverManager
+# 首先修复导入部分
+from selenium.webdriver.edge.service import Service as EdgeService
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
+# 在文件开头添加logger导入
+from utils.logger import setup_logger
+# 移除错误的__init__方法，恢复原来的类定义
+# 在文件顶部添加模块级别的logger
+import logging
 
+# 创建模块级别的logger
+logger = setup_logger('WebBrowserTool')
 
 class WebBrowserTool(BaseManusTool):
-    """增强版网页浏览器工具，支持多种网页操作类型，返回结构化结果"""
-
+    """基于Selenium的网页浏览器工具，支持多种网页操作类型，返回结构化结果"""
     name: str = "web_browser"
     description: str = '执行网页浏览器操作，支持导航、交互、内容提取、图片下载等功能。返回结构化结果包含status、message和details字段。使用方式: web_browser action="action_name" [url="网页URL"] [其他参数]。图片下载示例: web_browser action="download_image" params={"image_index": 0} 或 web_browser action="download_image" params={"selector": "[data-testid=\'download-button\']"}'
     memory: Optional[object] = None
@@ -28,6 +46,97 @@ class WebBrowserTool(BaseManusTool):
         "go_back", "refresh", "web_search", "wait", "extract_content", "switch_tab",
         "open_tab", "close_tab", "get_page_state", "take_screenshot", "download_image"
     ]
+
+    # 移除__init__方法，让基类处理初始化
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 不要在这里初始化logger，使用模块级别的logger
+
+    def _find_browser_binary(self) -> Optional[str]:
+        """自动查找浏览器二进制文件路径（支持Chrome和Edge）"""
+        # Windows常见浏览器安装路径
+        if sys.platform == 'win32':
+# Edge浏览器路径
+            edge_paths = [
+                os.path.join(os.environ.get('PROGRAMFILES', 'C:\\Program Files'), 'Microsoft', 'Edge', 'Application',
+                             'msedge.exe'),
+                os.path.join(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)'), 'Microsoft', 'Edge',
+                             'Application', 'msedge.exe'),
+                os.path.join(os.environ.get('LOCALAPPDATA', 'C:\\Users\\%USERNAME%\\AppData\\Local'), 'Microsoft', 'Edge',
+                             'Application', 'msedge.exe'),
+            ]
+
+            # Chrome浏览器路径
+            chrome_paths = [
+                os.path.join(os.environ.get('PROGRAMFILES', 'C:\\Program Files'), 'Google', 'Chrome', 'Application',
+                             'chrome.exe'),
+                os.path.join(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)'), 'Google', 'Chrome',
+                             'Application', 'chrome.exe'),
+                os.path.join(os.environ.get('LOCALAPPDATA', 'C:\\Users\\%USERNAME%\\AppData\\Local'), 'Google', 'Chrome',
+                             'Application', 'chrome.exe'),
+            ]
+
+            # 扩展用户特定路径
+            if 'USERNAME' in os.environ:
+                username = os.environ['USERNAME']
+                edge_paths.append(f'C:\\Users\\{username}\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe')
+                chrome_paths.append(f'C:\\Users\\{username}\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe')
+
+            # 首先尝试Edge浏览器
+            for path in edge_paths:
+                if os.path.exists(path):
+                    return path
+
+            # 如果Edge不存在，尝试Chrome
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    return path
+
+        # macOS常见浏览器安装路径
+        elif sys.platform == 'darwin':
+            edge_paths = [
+                '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+                '~/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+            ]
+
+            chrome_paths = [
+                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                '~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+            ]
+
+            # 首先尝试Edge浏览器
+            for path in edge_paths:
+                expanded_path = os.path.expanduser(path)
+                if os.path.exists(expanded_path):
+                    return expanded_path
+
+            # 如果Edge不存在，尝试Chrome
+            for path in chrome_paths:
+                expanded_path = os.path.expanduser(path)
+                if os.path.exists(expanded_path):
+                    return expanded_path
+
+        # Linux常见浏览器安装路径
+        elif sys.platform.startswith('linux'):
+            edge_paths = [
+                '/usr/bin/microsoft-edge',
+                '/usr/bin/microsoft-edge-stable'
+            ]
+
+            chrome_paths = [
+                '/usr/bin/google-chrome',
+                '/usr/bin/google-chrome-stable'
+            ]
+
+            # 首先尝试Edge浏览器
+            for path in edge_paths:
+                if os.path.exists(path):
+                    return path
+
+            # 如果Edge不存在，尝试Chrome
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    return path
 
     def _format_result(self, status: str, message: str, details: Dict[str, Any] = None) -> str:
         """格式化返回结果，包含状态、消息和详细信息"""
@@ -50,11 +159,17 @@ class WebBrowserTool(BaseManusTool):
         """根据错误类型提供建议"""
         suggestions = []
 
-        if error_type == "playwright_not_installed":
+        if error_type == "selenium_not_installed":
             suggestions = [
-                "请安装playwright库：pip install playwright",
-                "安装浏览器：playwright install",
+                "请安装selenium库：pip install selenium webdriver-manager",
+                "确保Chrome浏览器已安装",
                 "或者尝试使用其他工具如web_download或web_screenshot"
+            ]
+        elif error_type == "chrome_not_found":
+            suggestions = [
+                "请确保Chrome浏览器已安装",
+                "或者在环境变量中设置CHROME_BINARY_PATH指向Chrome可执行文件路径",
+                "或者修改代码中的_ensure_browser_initialized方法，手动指定Chrome路径"
             ]
         elif error_type == "navigation_failed":
             suggestions = [
@@ -157,7 +272,7 @@ class WebBrowserTool(BaseManusTool):
 
         return params
 
-    async def _ensure_browser_initialized(self, session_id: str = None) -> Dict[str, Any]:
+    def _ensure_browser_initialized(self, session_id: str = None) -> Dict[str, Any]:
         """确保浏览器和会话正确初始化"""
         if not session_id:
             session_id = str(uuid.uuid4())[:8]
@@ -165,67 +280,92 @@ class WebBrowserTool(BaseManusTool):
         if session_id not in self._browser_sessions:
             # 创建新的浏览器会话
             try:
-                from playwright.async_api import async_playwright
+                # 配置Chrome选项
+                chrome_options = Options()
+                chrome_options.add_argument("--disable-web-security")
+                chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+                chrome_options.add_argument("--window-size=1280,720")
+                chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-                playwright = await async_playwright().start()
-                browser = await playwright.chromium.launch(
-                    headless=True,
-                    args=['--disable-web-security', '--disable-features=VizDisplayCompositor']
-                )
+                # 尝试设置浏览器二进制文件路径
+                # 1. 首先检查环境变量
+                browser_binary_path = os.environ.get('BROWSER_BINARY_PATH') or os.environ.get('CHROME_BINARY_PATH')
 
-                context = await browser.new_context(
-                    viewport={'width': 1280, 'height': 720},
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                )
+                # 2. 如果环境变量没有设置，尝试自动查找（支持Edge和Chrome）
+                if not browser_binary_path:
+                    browser_binary_path = self._find_browser_binary()
 
-                page = await context.new_page()
+                # 3. 如果找到浏览器路径，设置它
+                if browser_binary_path:
+                    chrome_options.binary_location = browser_binary_path
+                    # 根据浏览器类型选择合适的驱动
+                    if 'msedge.exe' in browser_binary_path.lower() or 'Microsoft Edge' in browser_binary_path:
+                        # 使用Edge驱动
+                        service = EdgeService(EdgeChromiumDriverManager().install())
+                        browser = webdriver.Edge(service=service, options=chrome_options)
+                    else:
+                        # 使用Chrome驱动
+                        service = Service(ChromeDriverManager().install())
+                        browser = webdriver.Chrome(service=service, options=chrome_options)
+                else:
+                    # 如果找不到浏览器路径，提供更友好的错误信息
+                    error_msg = "未找到Chrome或Edge浏览器。请确保已安装浏览器或在环境变量中设置BROWSER_BINARY_PATH。"
+                    logger.error(error_msg)
+                    return {
+                        "error": error_msg,
+                        "error_type": "browser_not_found"
+                    }
+
+                # 使用无头模式
+                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--disable-gpu")
+
+                # 设置默认超时
+                browser.set_page_load_timeout(30)
+                browser.set_script_timeout(30)
 
                 self._browser_sessions[session_id] = {
-                    "playwright": playwright,
                     "browser": browser,
-                    "context": context,
-                    "page": page,
-                    "tabs": [page],
+                    "tabs": [browser.current_window_handle],
                     "current_tab_index": 0,
                     "created_at": datetime.now(),
                     "last_activity": datetime.now()
                 }
 
-            except ImportError:
-                return {"error": "未安装playwright库。请运行 'pip install playwright && playwright install' 来安装。",
-                        "error_type": "playwright_not_installed"}
             except Exception as e:
-                return {"error": f"浏览器初始化失败: {str(e)}", "error_type": "browser_init_failed"}
+                error_msg = f"浏览器初始化失败: {str(e)}"
+                # 使用模块级别的logger
+                logger.error(error_msg)
+                return {"error": error_msg, "error_type": "browser_init_failed"}
 
         # 更新最后活动时间
         self._browser_sessions[session_id]["last_activity"] = datetime.now()
-        return self._browser_sessions[session_id]
-
-    async def _get_current_page(self, session_id: str) -> Any:
+        return {"session_id": session_id}
+    def _get_current_page(self, session_id: str) -> Any:
         """获取当前活动的页面"""
-        session = await self._ensure_browser_initialized(session_id)
+        session = self._ensure_browser_initialized(session_id)
         if "error" in session:
             return session
 
-        tabs = session["tabs"]
-        current_index = session["current_tab_index"]
-        return tabs[current_index] if current_index < len(tabs) else tabs[0]
+        return session["browser"]
 
-    async def _go_to_url(self, session_id: str, url: str) -> Dict[str, Any]:
+    def _go_to_url(self, session_id: str, url: str) -> Dict[str, Any]:
         """导航到指定URL"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
         try:
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
 
-            await page.goto(url, wait_until='networkidle', timeout=30000)
+            browser.get(url)
+            # 等待页面加载完成
+            time.sleep(3)
 
             # 获取页面信息
-            title = await page.title()
-            current_url = page.url
+            title = browser.title
+            current_url = browser.current_url
 
             return {
                 "success": True,
@@ -239,466 +379,276 @@ class WebBrowserTool(BaseManusTool):
                 error_type = "navigation_timeout"
             return {"error": f"导航失败: {str(e)}", "error_type": error_type}
 
-    async def _click_element(self, session_id: str, selector: str) -> Dict[str, Any]:
+    def _click_element(self, session_id: str, selector: str) -> Dict[str, Any]:
         """点击指定元素"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
         try:
-            await page.wait_for_selector(selector, timeout=10000)
-            await page.click(selector)
-            await page.wait_for_load_state('networkidle')
+            # 等待元素出现
+            element = WebDriverWait(browser, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+            )
+            element.click()
+            # 等待页面加载
+            time.sleep(2)
 
             return {"success": True, "message": f"已点击元素: {selector}"}
+        except TimeoutException:
+            return {"error": f"元素未找到或不可点击: {selector}", "error_type": "element_not_found"}
         except Exception as e:
             error_type = "element_not_found"
             if "timeout" in str(e).lower():
                 error_type = "element_timeout"
             return {"error": f"点击元素失败: {str(e)}", "error_type": error_type}
 
-    async def _input_text(self, session_id: str, selector: str, text: str) -> Dict[str, Any]:
+    def _input_text(self, session_id: str, selector: str, text: str) -> Dict[str, Any]:
         """向指定元素输入文本"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
         try:
-            await page.wait_for_selector(selector, timeout=10000)
-            await page.fill(selector, text)
+            # 等待元素出现
+            element = WebDriverWait(browser, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+            )
+            element.clear()
+            element.send_keys(text)
 
             return {"success": True, "message": f"已向元素 {selector} 输入文本: {text}"}
+        except TimeoutException:
+            return {"error": f"元素未找到: {selector}", "error_type": "element_not_found"}
         except Exception as e:
             error_type = "element_not_found"
             if "timeout" in str(e).lower():
                 error_type = "element_timeout"
             return {"error": f"输入文本失败: {str(e)}", "error_type": error_type}
 
-    async def _extract_content(self, session_id: str, target: str = "main") -> Dict[str, Any]:
+    def _extract_content(self, session_id: str, target: str = "main") -> Dict[str, Any]:
         """提取页面内容"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
         try:
             # 根据目标类型提取内容
             if target == "main":
-                content = await page.evaluate('''() => {
-                    const main = document.querySelector('main') || document.querySelector('article') || document.body;
-                    return main.innerText;
-                }''')
+                # 尝试获取main或article或body元素的文本
+                try:
+                    main_element = browser.find_element(By.TAG_NAME, 'main')
+                    content = main_element.text
+                except NoSuchElementException:
+                    try:
+                        article_element = browser.find_element(By.TAG_NAME, 'article')
+                        content = article_element.text
+                    except NoSuchElementException:
+                        content = browser.find_element(By.TAG_NAME, 'body').text
             elif target == "all_text":
-                content = await page.evaluate('() => document.body.innerText')
+                content = browser.find_element(By.TAG_NAME, 'body').text
             elif target == "links":
-                content = await page.evaluate('''() => {
-                    const links = Array.from(document.querySelectorAll('a'));
-                    return links.map(link => ({
-                        text: link.innerText,
-                        href: link.href
-                    }));
-                }''')
+                links = browser.find_elements(By.TAG_NAME, 'a')
+                content = [{
+                    "text": link.text,
+                    "href": link.get_attribute('href')
+                } for link in links]
             else:
-                # 使用选择器提取特定内容
-                content = await page.evaluate(f'''() => {{
-                    const element = document.querySelector('{target}');
-                    return element ? element.innerText : '未找到指定元素';
-                }}''')
+                content = browser.find_element(By.TAG_NAME, 'body').text
 
             return {
                 "success": True,
-                "content": content,
-                "target": target
+                "message": f"已提取页面{target}内容",
+                "content": content
             }
         except Exception as e:
-            return {"error": f"内容提取失败: {str(e)}", "error_type": "content_extraction_failed"}
+            return {"error": f"提取内容失败: {str(e)}", "error_type": "content_extraction_failed"}
 
-    async def _get_page_state(self, session_id: str) -> Dict[str, Any]:
-        """获取当前页面状态信息"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
+    def _get_page_state(self, session_id: str) -> Dict[str, Any]:
+        """获取页面状态信息"""
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
         try:
-            # 获取页面基本信息
-            title = await page.title()
-            url = page.url
+            # 获取基本页面信息
+            title = browser.title
+            url = browser.current_url
 
-            # 获取可交互元素
-            interactive_elements = await page.evaluate('''() => {
-                const elements = Array.from(document.querySelectorAll('a, button, input, select, textarea'));
-                return elements.map((el, index) => ({
-                    index: index,
-                    tag: el.tagName.toLowerCase(),
-                    text: el.innerText || el.value || el.placeholder || '',
-                    type: el.type || '',
-                    id: el.id || '',
-                    class: el.className || ''
-                }));
-            }''')
+            # 获取可见文本
+            visible_text = browser.find_element(By.TAG_NAME, 'body').text[:500] + "..." if len(
+                browser.find_element(By.TAG_NAME, 'body').text) > 500 else browser.find_element(By.TAG_NAME,
+                                                                                                'body').text
 
-            # 获取滚动信息
-            scroll_info = await page.evaluate('''() => {
-                return {
-                    scrollY: window.scrollY,
-                    scrollX: window.scrollX,
-                    innerHeight: window.innerHeight,
-                    innerWidth: window.innerWidth,
-                    documentHeight: document.documentElement.scrollHeight,
-                    documentWidth: document.documentElement.scrollWidth
-                };
-            }''')
+            # 获取一些关键元素
+            headings = browser.find_elements(By.XPATH, '//h1 | //h2 | //h3')
+            heading_texts = [h.text for h in headings if h.text.strip()]
 
-            # 生成截图
-            screenshot = await page.screenshot(full_page=False, type='jpeg', quality=80)
-            screenshot_b64 = base64.b64encode(screenshot).decode('utf-8') if hasattr(screenshot,
-                                                                                     'decode') else base64.b64encode(
-                screenshot).decode('utf-8')
+            # 获取链接数量
+            links = browser.find_elements(By.TAG_NAME, 'a')
+            link_count = len(links)
+
+            # 获取图片数量
+            images = browser.find_elements(By.TAG_NAME, 'img')
+            image_count = len(images)
 
             return {
                 "success": True,
-                "url": url,
+                "message": "已获取页面状态信息",
                 "title": title,
-                "interactive_elements": interactive_elements,
-                "scroll_info": scroll_info,
-                "screenshot": screenshot_b64,
-                "help": "[0], [1], [2] 等代表可点击元素的索引，使用 click_element 操作时指定索引"
+                "url": url,
+                "visible_text_preview": visible_text,
+                "heading_count": len(heading_texts),
+                "headings": heading_texts,
+                "link_count": link_count,
+                "image_count": image_count
             }
         except Exception as e:
             return {"error": f"获取页面状态失败: {str(e)}", "error_type": "page_state_failed"}
 
-    async def _extract_images(self, session_id: str) -> Dict[str, Any]:
-        """提取页面中的所有图片信息"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
-
-        try:
-            images = await page.evaluate('''() => {
-                const images = Array.from(document.querySelectorAll('img'));
-                return images.map((img, index) => ({
-                    index: index,
-                    src: img.src,
-                    alt: img.alt || '',
-                    width: img.naturalWidth,
-                    height: img.naturalHeight,
-                    title: img.title || '',
-                    className: img.className || ''
-                })).filter(img => img.src && img.src.startsWith('http'));
-            }''')
-
-            return {
-                "success": True,
-                "images": images,
-                "count": len(images)
-            }
-        except Exception as e:
-            return {"error": f"提取图片信息失败: {str(e)}", "error_type": "image_extraction_failed"}
-
-    async def _download_image(self, session_id: str, image_index: int = None, image_url: str = None) -> Dict[str, Any]:
-        """下载指定图片"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
-
-        try:
-            # 确保下载目录存在
-            download_dir = Path("assets/downloads")
-            download_dir.mkdir(parents=True, exist_ok=True)
-
-            if image_url:
-                # 直接下载指定URL的图片
-                image_src = image_url
-            else:
-                # 通过索引获取图片URL
-                images_result = await self._extract_images(session_id)
-                if "error" in images_result:
-                    return images_result
-
-                images = images_result["images"]
-                if image_index >= len(images):
-                    return {"error": f"图片索引 {image_index} 超出范围，共 {len(images)} 张图片",
-                            "error_type": "image_index_out_of_range"}
-
-                image_src = images[image_index]["src"]
-
-            # 使用playwright下载图片
-            async with page.expect_download() as download_info:
-                # 模拟右键点击图片并选择"另存为"
-                if image_url:
-                    # 对于直接URL，导航到图片页面
-                    await page.goto(image_src, wait_until='networkidle')
-                else:
-                    # 对于页面中的图片，点击触发下载
-                    await page.click(f'img:nth-child({image_index + 1})', button='right')
-                    # 这里需要模拟右键菜单操作，但playwright不支持直接模拟右键菜单
-                    # 改为使用更简单的方法：直接获取图片数据
-
-            # 更简单的方法：直接获取图片数据并保存
-            try:
-                # 获取图片数据
-                image_data = await page.evaluate(f'''async () => {{
-                    const response = await fetch('{image_src}');
-                    const blob = await response.blob();
-                    return await new Promise((resolve) => {{
-                        const reader = new FileReader();
-                        reader.onloadend = () => resolve(reader.result);
-                        reader.readAsDataURL(blob);
-                    }});
-                }}''')
-
-                # 解析base64数据
-                if image_data.startswith('data:'):
-                    image_data = image_data.split(',')[1]
-
-                # 解码并保存
-                image_bytes = base64.b64decode(image_data)
-
-                # 生成文件名
-                filename = f"image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-                filepath = download_dir / filename
-
-                # 保存文件
-                with open(filepath, 'wb') as f:
-                    f.write(image_bytes)
-
-                return {
-                    "success": True,
-                    "message": f"图片下载成功",
-                    "filename": filename,
-                    "filepath": str(filepath),
-                    "size": len(image_bytes)
-                }
-
-            except Exception as e:
-                return {"error": f"图片下载失败: {str(e)}", "error_type": "download_failed"}
-
-        except Exception as e:
-            return {"error": f"下载图片失败: {str(e)}", "error_type": "download_failed"}
-
-    async def _download_image_by_click(self, session_id: str, selector: str) -> Dict[str, Any]:
-        """通过点击下载按钮下载图片（适用于Pexels等网站）"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
-
-        try:
-            # 确保下载目录存在
-            download_dir = Path("assets/downloads")
-            download_dir.mkdir(parents=True, exist_ok=True)
-
-            # 等待下载按钮出现
-            await page.wait_for_selector(selector, timeout=10000)
-
-            # 监听下载事件
-            async with page.expect_download() as download_info:
-                await page.click(selector)
-
-            download = await download_info.value
-            filename = download.suggested_filename
-
-            # 保存文件
-            filepath = download_dir / filename
-            await download.save_as(filepath)
-
-            return {
-                "success": True,
-                "message": f"图片下载成功",
-                "filename": filename,
-                "filepath": str(filepath)
-            }
-
-        except Exception as e:
-            return {"error": f"通过点击下载图片失败: {str(e)}", "error_type": "download_failed"}
-
-    async def _take_screenshot(self, session_id: str, area: str = "full_page", selector: str = None) -> Dict[str, Any]:
-        """截取网页截图，支持全屏截图和指定区域截图"""
-        page = await self._get_current_page(session_id)
-        if "error" in page:
-            return page
+    def _take_screenshot(self, session_id: str, area: str = "full_page", selector: str = None) -> Dict[str, Any]:
+        """截取页面截图"""
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
         try:
             # 确保截图目录存在
-            screenshot_dir = Path("assets/screenshots")
-            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            screenshots_dir = os.path.join(os.getcwd(), "screenshots")
+            os.makedirs(screenshots_dir, exist_ok=True)
 
-            # 生成文件名
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"screenshot_{timestamp}.png"
-            filepath = screenshot_dir / filename
+            # 生成唯一文件名
+            filename = f"screenshot_{session_id}_{int(time.time())}.png"
+            filepath = os.path.join(screenshots_dir, filename)
 
             if area == "full_page":
-# 全屏截图
-                screenshot_data = await page.screenshot(full_page=True, path=filepath)
+                # 截取全屏
+                browser.save_screenshot(filepath)
             elif area == "viewport":
-                # 可视区域截图
-                screenshot_data = await page.screenshot(path=filepath)
-            elif area == "element" and selector:
-                # 指定元素截图
-                await page.wait_for_selector(selector, timeout=10000)
-                element = await page.query_selector(selector)
-                if element:
-                    screenshot_data = await element.screenshot(path=filepath)
-                else:
-                    return {"error": f"未找到选择器为 {selector} 的元素", "error_type": "element_not_found"}
-            else:
-                return {"error": "不支持的截图区域类型或缺少选择器", "error_type": "invalid_screenshot_area"}
+                # 截取可视区域
+                browser.save_screenshot(filepath)
+            elif selector:
+                # 根据选择器截图
+                try:
+                    element = WebDriverWait(browser, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    element.screenshot(filepath)
+                except Exception as e:
+                    # 如果元素截图失败，回退到全屏截图
+                    browser.save_screenshot(filepath)
+                    return {
+                        "success": True,
+                        "message": f"元素截图失败，已截取全屏。错误: {str(e)}",
+                        "fallback_to_full_page": True,
+                        "filepath": filepath
+                    }
 
-            # 转换为base64编码
-            with open(filepath, 'rb') as f:
-                image_bytes = f.read()
-            base64_image = base64.b64encode(image_bytes).decode('utf-8')
+            # 读取截图并转换为base64（如果需要）
+            with open(filepath, "rb") as f:
+                base64_data = base64.b64encode(f.read()).decode('utf-8')
 
             return {
                 "success": True,
-                "message": f"截图成功: {filename}",
-                "filename": filename,
-                "filepath": str(filepath),
-                "base64_image": base64_image,
-                "size": len(image_bytes)
+                "message": "已成功截取截图",
+                "filepath": filepath,
+                "base64": base64_data
             }
-
         except Exception as e:
             return {"error": f"截图失败: {str(e)}", "error_type": "screenshot_failed"}
 
-    async def _download_image_with_fallback(self, session_id: str, image_index: int = None, image_url: str = None,
-                                            fallback_to_screenshot: bool = True) -> Dict[str, Any]:
+    def _download_image_with_fallback(self, session_id: str, image_index: int = None,
+                                      image_url: str = None, fallback_to_screenshot: bool = True) -> Dict[str, Any]:
         """下载图片，失败时自动回退到截图功能"""
-        # 首先尝试正常下载
-        download_result = await self._download_image(session_id, image_index, image_url)
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
 
-        # 如果下载成功，直接返回结果
-        if "success" in download_result and download_result["success"]:
-            return download_result
+        try:
+            # 确保下载目录存在
+            download_dir = os.path.join(os.getcwd(), "downloads")
+            os.makedirs(download_dir, exist_ok=True)
 
-        # 如果下载失败且启用了回退机制，尝试截图
-        if fallback_to_screenshot and "error" in download_result:
-            page = await self._get_current_page(session_id)
-            if "error" in page:
-                return download_result  # 返回原始错误
-
-            try:
-                # 获取当前页面信息用于截图
-                current_url = page.url
-                page_title = await page.title()
-
-                # 尝试不同的截图策略
-                screenshot_results = []
-
-                # 策略1: 尝试截取全屏
-                full_screenshot = await self._take_screenshot(session_id, "full_page")
-                if "success" in full_screenshot:
-                    screenshot_results.append({
-                        "type": "full_page",
-                        "result": full_screenshot
-                    })
-
-                # 策略2: 如果是指定图片，尝试截取图片元素
-                if image_index is not None:
-                    # 获取图片信息
-                    images_result = await self._extract_images(session_id)
-                    if "success" in images_result and image_index < len(images_result["images"]):
-                        image_info = images_result["images"][image_index]
-                        # 尝试点击图片放大后再截图
-                        try:
-                            await page.click(f'img:nth-child({image_index + 1})')
-                            await asyncio.sleep(2)  # 等待图片加载/放大
-
-                            # 截取可视区域
-                            viewport_screenshot = await self._take_screenshot(session_id, "viewport")
-                            if "success" in viewport_screenshot:
-                                screenshot_results.append({
-                                    "type": "viewport_after_click",
-                                    "result": viewport_screenshot
-                                })
-                        except:
-                            pass  # 点击失败不影响其他策略
-
-                # 策略3: 截取可视区域
-                viewport_screenshot = await self._take_screenshot(session_id, "viewport")
-                if "success" in viewport_screenshot:
-                    screenshot_results.append({
-                        "type": "viewport",
-                        "result": viewport_screenshot
-                    })
-
-                if screenshot_results:
-                    # 选择最佳截图结果（优先全屏截图）
-                    best_screenshot = None
-                    for result in screenshot_results:
-                        if result["type"] == "full_page":
-                            best_screenshot = result["result"]
-                            break
-                    if not best_screenshot and screenshot_results:
-                        best_screenshot = screenshot_results[0]["result"]
-
-                    return {
-                        "success": True,
-                        "message": f"图片下载失败，已自动使用截图替代。原始错误: {download_result['error']}",
-                        "fallback_used": True,
-                        "original_error": download_result["error"],
-                        "screenshot_result": best_screenshot,
-                        "screenshot_strategies": [r["type"] for r in screenshot_results]
-                    }
-                else:
-                    return download_result  # 所有截图策略都失败，返回原始错误
-
-            except Exception as screenshot_error:
-                # 截图也失败，返回组合错误信息
-                return {
-                    "error": f"图片下载失败且截图替代也失败。下载错误: {download_result['error']}, 截图错误: {str(screenshot_error)}",
-                    "error_type": "download_and_screenshot_failed"
-                }
-
-        # 如果没有启用回退机制或不需要回退，返回原始错误
-        return download_result
-
-    async def _download_image_by_click_with_fallback(self, session_id: str, selector: str,
-                                                     fallback_to_screenshot: bool = True) -> Dict[str, Any]:
-        """通过点击下载按钮下载图片，失败时自动回退到截图功能"""
-        # 首先尝试正常下载
-        download_result = await self._download_image_by_click(session_id, selector)
-
-        # 如果下载成功，直接返回结果
-        if "success" in download_result and download_result["success"]:
-            return download_result
-
-        # 如果下载失败且启用了回退机制，尝试截图
-        if fallback_to_screenshot and "error" in download_result:
-            page = await self._get_current_page(session_id)
-            if "error" in page:
-                return download_result  # 返回原始错误
-
-            try:
-                # 尝试点击下载按钮后截图（可能按钮会打开图片预览）
+            if image_url:
+                # 通过URL下载图片
+                import requests
                 try:
-                    await page.click(selector)
-                    await asyncio.sleep(3)  # 等待可能的图片预览加载
-                except:
-                    pass  # 点击失败不影响截图
+                    response = requests.get(image_url)
+                    response.raise_for_status()
 
-                # 截取全屏
-                screenshot_result = await self._take_screenshot(session_id, "full_page")
+                    # 生成文件名
+                    filename = f"image_{session_id}_{int(time.time())}.png"
+                    filepath = os.path.join(download_dir, filename)
 
-                if "success" in screenshot_result:
+                    with open(filepath, 'wb') as f:
+                        f.write(response.content)
+
                     return {
                         "success": True,
-                        "message": f"通过点击下载失败，已自动使用截图替代。原始错误: {download_result['error']}",
-                        "fallback_used": True,
-                        "original_error": download_result["error"],
-                        "screenshot_result": screenshot_result
+                        "message": f"已成功下载图片: {filename}",
+                        "filepath": filepath
                     }
-                else:
-                    return download_result  # 截图失败，返回原始错误
+                except Exception as e:
+                    if fallback_to_screenshot:
+                        # 回退到截图
+                        screenshot_result = self._take_screenshot(session_id)
+                        if "success" in screenshot_result:
+                            return {
+                                "success": True,
+                                "message": f"图片下载失败，已自动使用截图替代。原始错误: {str(e)}",
+                                "fallback_used": True,
+                                "screenshot_result": screenshot_result
+                            }
+                    return {"error": f"图片下载失败: {str(e)}", "error_type": "download_failed"}
 
-            except Exception as screenshot_error:
-                return {
-                    "error": f"点击下载失败且截图替代也失败。下载错误: {download_result['error']}, 截图错误: {str(screenshot_error)}",
-                    "error_type": "click_download_and_screenshot_failed"
-                }
+            elif image_index is not None:
+                # 通过索引下载图片
+                images = browser.find_elements(By.TAG_NAME, 'img')
+                if 0 <= image_index < len(images):
+                    image_url = images[image_index].get_attribute('src')
+                    if image_url:
+                        return self._download_image_with_fallback(session_id, image_url=image_url,
+                                                                  fallback_to_screenshot=fallback_to_screenshot)
+                return {"error": f"无效的图片索引: {image_index}", "error_type": "invalid_image_index"}
 
-        return download_result
+            return {"error": "请提供图片URL或索引", "error_type": "missing_parameters"}
+        except Exception as e:
+            return {"error": f"下载图片失败: {str(e)}", "error_type": "download_failed"}
 
-    async def _run(self, query: str) -> str:
+    def _download_image_by_click_with_fallback(self, session_id: str, selector: str,
+                                               fallback_to_screenshot: bool = True) -> Dict[str, Any]:
+        """通过点击下载按钮下载图片，失败时自动回退到截图功能"""
+        browser = self._get_current_page(session_id)
+        if "error" in browser:
+            return browser
+
+        try:
+            # 尝试点击下载按钮
+            try:
+                element = WebDriverWait(browser, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                )
+                element.click()
+                time.sleep(3)  # 等待下载完成
+
+                # 注意：Selenium不直接支持监控下载完成，这里只是模拟
+                return {"success": True, "message": f"已点击下载按钮: {selector}"}
+            except Exception as e:
+                if fallback_to_screenshot:
+                    # 回退到截图
+                    screenshot_result = self._take_screenshot(session_id)
+                    if "success" in screenshot_result:
+                        return {
+                            "success": True,
+                            "message": f"点击下载失败，已自动使用截图替代。原始错误: {str(e)}",
+                            "fallback_used": True,
+                            "screenshot_result": screenshot_result
+                        }
+                return {"error": f"点击下载失败: {str(e)}", "error_type": "click_download_failed"}
+        except Exception as e:
+            return {"error": f"下载图片失败: {str(e)}", "error_type": "download_failed"}
+
+    def _run(self, query: str) -> str:
         """执行网页浏览器操作，返回结构化结果"""
         params = self._parse_query(query)
         action = params["action"]
@@ -706,7 +656,6 @@ class WebBrowserTool(BaseManusTool):
 
         if not action:
             return self._format_result("failed", "请提供操作类型（action）", {"error_type": "missing_action"})
-
         # 修复：添加额外的参数解析逻辑，确保action被正确识别
         if action.startswith('"') and action.endswith('"'):
             action = action[1:-1]  # 移除可能的引号
@@ -724,7 +673,7 @@ class WebBrowserTool(BaseManusTool):
                 url = url[1:-1]
             if not url:
                 return self._format_result("failed", "导航操作需要提供URL", {"error_type": "missing_url"})
-            result = await self._go_to_url(session_id, url)
+            result = self._go_to_url(session_id, url)
 
         elif action == "click_element":
             # 修复：添加类似的参数清理
@@ -733,23 +682,23 @@ class WebBrowserTool(BaseManusTool):
                 selector = selector[1:-1]
             if not selector:
                 return self._format_result("failed", "点击操作需要提供元素选择器", {"error_type": "missing_selector"})
-            result = await self._click_element(session_id, selector)
+            result = self._click_element(session_id, selector)
 
         elif action == "input_text":
             if not params["selector"] or not params["text"]:
                 return self._format_result("failed", "输入文本操作需要提供选择器和文本",
                                            {"error_type": "missing_parameters"})
-            result = await self._input_text(session_id, params["selector"], params["text"])
+            result = self._input_text(session_id, params["selector"], params["text"])
 
         elif action == "extract_content":
             target = params.get("params", {}).get("target", "main")
             # 支持直接通过参数传递target
             if not target and "target" in params:
                 target = params["target"]
-            result = await self._extract_content(session_id, target)
+            result = self._extract_content(session_id, target)
 
         elif action == "get_page_state":
-            result = await self._get_page_state(session_id)
+            result = self._get_page_state(session_id)
 
         elif action == "take_screenshot":
             # 截图操作修复
@@ -760,7 +709,7 @@ class WebBrowserTool(BaseManusTool):
                 area = params["area"]
             if not selector and "selector" in params:
                 selector = params["selector"]
-            result = await self._take_screenshot(session_id, area, selector)
+            result = self._take_screenshot(session_id, area, selector)
 
         elif action == "download_image":
             # 支持多种下载方式，默认启用回退机制
@@ -781,31 +730,31 @@ class WebBrowserTool(BaseManusTool):
                     pass
 
             if selector:
-                result = await self._download_image_by_click_with_fallback(session_id, selector, fallback)
+                result = self._download_image_by_click_with_fallback(session_id, selector, fallback)
             elif image_url:
-                result = await self._download_image_with_fallback(session_id, image_url=image_url,
-                                                                  fallback_to_screenshot=fallback)
+                result = self._download_image_with_fallback(session_id, image_url=image_url,
+                                                            fallback_to_screenshot=fallback)
             elif image_index is not None:
-                result = await self._download_image_with_fallback(session_id, image_index=image_index,
-                                                                  fallback_to_screenshot=fallback)
+                result = self._download_image_with_fallback(session_id, image_index=image_index,
+                                                            fallback_to_screenshot=fallback)
             else:
                 result = {"error": "请提供图片索引、URL或选择器", "error_type": "missing_image_parameters"}
 
         elif action == "scroll_down":
-            page = await self._get_current_page(session_id)
-            if "error" not in page:
-                await page.evaluate('window.scrollBy(0, window.innerHeight)')
+            browser = self._get_current_page(session_id)
+            if "error" not in browser:
+                browser.execute_script('window.scrollBy(0, window.innerHeight)')
                 result = {"success": True, "message": "已向下滚动"}
             else:
-                result = page
+                result = browser
 
         elif action == "scroll_up":
-            page = await self._get_current_page(session_id)
-            if "error" not in page:
-                await page.evaluate('window.scrollBy(0, -window.innerHeight)')
+            browser = self._get_current_page(session_id)
+            if "error" not in browser:
+                browser.execute_script('window.scrollBy(0, -window.innerHeight)')
                 result = {"success": True, "message": "已向上滚动"}
             else:
-                result = page
+                result = browser
 
         elif action == "wait":
             wait_time = params.get("wait_time", 5)
@@ -814,7 +763,7 @@ class WebBrowserTool(BaseManusTool):
                 wait_time = float(wait_time)
             except:
                 wait_time = 5
-            await asyncio.sleep(wait_time)
+            time.sleep(wait_time)
             result = {"success": True, "message": f"已等待 {wait_time} 秒"}
 
         else:
@@ -828,34 +777,3 @@ class WebBrowserTool(BaseManusTool):
             return self._format_result("failed", result["error"], {"error_type": error_type})
         else:
             return self._format_result("unknown", "操作执行完成，但结果状态未知", result)
-
-    def call(self, query: str) -> str:
-        """实现BaseManusTool的call方法，支持异步操作，适配已有事件循环环境"""
-        try:
-            # 检查当前是否已有运行中的事件循环
-            try:
-                loop = asyncio.get_event_loop()
-                # 如果当前循环已经在运行，使用它
-                if loop.is_running():
-                    # 在运行中的循环上使用create_task并等待完成
-                    # 注意：这里使用run_coroutine_threadsafe是为了线程安全
-                    # 但由于我们需要立即获取结果，我们可以使用更直接的方法
-                    future = asyncio.run_coroutine_threadsafe(self._run(query), loop)
-                    # 等待结果，设置合理的超时
-                    result = future.result(timeout=60)  # 60秒超时
-                    return result
-                else:
-                    # 当前循环存在但未运行，使用它
-                    result = loop.run_until_complete(self._run(query))
-                    return result
-            except RuntimeError:
-                # 没有找到事件循环，创建新的
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(self._run(query))
-                    return result
-                finally:
-                    loop.close()
-        except Exception as e:
-            return self._format_result("failed", f"工具调用失败: {str(e)}", {"error_type": "tool_execution_failed"})

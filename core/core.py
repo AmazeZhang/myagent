@@ -7,6 +7,7 @@ from core.registry import ToolRegistry  # 导入工具注册表
 from core.multi_agent import MultiAgentOrchestrator  # 导入多Agent协调器
 from utils.langsmith_config import langsmith_config  # 导入LangSmith配置
 from utils.config_manager import config_manager  # 导入配置管理器
+from rag.rag_manager import RAGManager  # 添加RAG管理器导入
 
 class ManusCore:
     def __init__(self, model_name: str = None, model_type: str = "ollama"):
@@ -15,6 +16,7 @@ class ManusCore:
         self.tools = []
         self.agent = None
         self.tool_registry = ToolRegistry()  # 创建工具注册表
+        self.rag_manager = RAGManager()  # 初始化RAG管理器
         
         # 使用配置管理器中的模型名称或参数提供的模型名称
         self.model_name = model_name or config_manager.model_name
@@ -72,6 +74,11 @@ class ManusCore:
 
         # 合并文档上下文和对话上下文
         full_context = doc_context + chat_context
+        
+        # 添加RAG检索的相关知识
+        rag_context = self.rag_manager.get_rag_context(query)
+        if rag_context:
+            full_context += "【相关知识】\n" + rag_context + "\n\n"
 
         # 使用多Agent系统处理查询
         result = self.multi_agent.run(query, memory_context=full_context)

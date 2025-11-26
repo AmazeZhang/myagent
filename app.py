@@ -9,6 +9,7 @@ load_dotenv()
 from core.core import ManusCore
 from tools.document_reader import DocumentReaderTool
 from tools.web_tools_collection import WebToolsCollection
+from tools.rag_tools import RAGQueryTool
 from utils.file_utils import save_upload
 from utils.parser_utils import parse_file, get_preview
 from utils.config_manager import config_manager
@@ -32,7 +33,10 @@ def init_core(model_name=None, model_type="ollama"):
         # 创建核心实例
         # 修改ManusCore初始化，传递model_type参数
         core = ManusCore(model_name=model_name, model_type=model_type)
-        
+
+        # 注册RAG工具
+        core.register_tool(RAGQueryTool)
+
         # 注册基础工具
         core.register_tool(DocumentReaderTool(memory=core.doc_memory))
         #core.register_tool(BaiduSearchTool())
@@ -244,3 +248,23 @@ if user_input:
 
     # 保存最终答案到消息历史
     st.session_state.messages.append({"role": "assistant", "content": result["final_answer"]})
+
+# 在侧边栏添加RAG相关操作
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("🔍 RAG知识库管理")
+    
+    if st.button("📚 索引项目代码"):
+        with st.spinner("正在索引项目代码..."):
+            stats = manus.rag_manager.index_project_code()
+            st.success(f"✅ 索引完成！处理了 {stats['processed_files']} 个文件，创建了 {stats['total_documents']} 个文档块")
+    
+    # 显示RAG统计信息
+    if hasattr(manus, 'rag_manager'):
+        rag_stats = manus.rag_manager.get_statistics()
+        st.info(f"📊 当前知识库包含 {rag_stats['document_count']} 个文档块")
+    
+    if st.button("🗑️ 清空知识库"):
+        if st.warning("确定要清空所有知识库数据吗？"):
+            manus.rag_manager.clear_all()
+            st.success("✅ 知识库已清空")
