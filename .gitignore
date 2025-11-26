@@ -3,3 +3,5 @@ logs/
 .trae/
 models
 OpenManus
+rag/vector_store
+assets/uploads
